@@ -1,0 +1,11 @@
+services:
+  db:
+    image: pgvector/pgvector:pg16   # co san pgvector cho tinh nang quet anh sau nay
+    environment:
+      POSTGRES_DB: scanit
+      POSTGRES_USER: scanit
+      POSTGRES_PASSWORD: scanit
+    ports: ["5432:5432"]
+    volumes: [pgdata:/var/lib/postgresql/data]
+volumes:
+  pgdata:
