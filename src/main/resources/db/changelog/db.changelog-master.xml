@@ -6,5 +6,6 @@
 
     <!-- Moi thay doi schema = 1 file changelog moi, them include o duoi. Khong sua changeset da chay. -->
     <include file="db/changelog/changes/001-init.xml"/>
+    <include file="db/changelog/changes/002-image-embeddings.xml"/>
 
 </databaseChangeLog>

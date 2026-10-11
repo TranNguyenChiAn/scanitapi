@@ -40,6 +40,10 @@ public class SecurityConfig {
                 .authorizeHttpRequests(a -> a
                         .requestMatchers(HttpMethod.POST, "/api/auth/login").permitAll()
                         .requestMatchers("/actuator/health", "/error").permitAll()
+                        // Tai lieu API (chi co khi springdoc duoc bat: profile dev). Goi API that van can token.
+                        .requestMatchers("/swagger-ui.html", "/swagger-ui/**", "/v3/api-docs/**").permitAll()
+                        // Anh dat ten theo ma bam noi dung (khong doan duoc) nen cong khai de app/web tai truc tiep
+                        .requestMatchers(HttpMethod.GET, "/media/**").permitAll()
                         .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
                         .anyRequest().authenticated())
                 // Thieu / sai token -> 401 (khong phai 403 nhu BE cu); thieu quyen -> 403

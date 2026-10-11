@@ -42,6 +42,21 @@ public class GlobalExceptionHandler {
         return ResponseEntity.badRequest().body(new ApiError("VALIDATION", "Nội dung gửi lên không đúng định dạng."));
     }
 
+    @ExceptionHandler(org.springframework.dao.DataIntegrityViolationException.class)
+    ResponseEntity<ApiError> conflict(org.springframework.dao.DataIntegrityViolationException e) {
+        log.warn("Vi pham rang buoc du lieu: {}", e.getMostSpecificCause().getMessage());
+        boolean dup = e instanceof org.springframework.dao.DuplicateKeyException;
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(new ApiError("CONFLICT", dup
+                ? "Dữ liệu bị trùng (mã mẫu, SKU hoặc mã vạch đã tồn tại)."
+                : "Dữ liệu không hợp lệ hoặc đang được dùng ở nơi khác."));
+    }
+
+    @ExceptionHandler(org.springframework.web.multipart.MaxUploadSizeExceededException.class)
+    ResponseEntity<ApiError> tooLarge(org.springframework.web.multipart.MaxUploadSizeExceededException e) {
+        return ResponseEntity.status(HttpStatus.PAYLOAD_TOO_LARGE)
+                .body(new ApiError("TOO_LARGE", "Ảnh quá lớn (tối đa 12MB)."));
+    }
+
     @ExceptionHandler(Exception.class)
     ResponseEntity<ApiError> other(Exception e) {
         // 404 (sai duong dan), 405 (sai phuong thuc)... cua Spring: giu nguyen ma trang thai

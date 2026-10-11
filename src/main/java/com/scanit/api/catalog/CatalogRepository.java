@@ -59,7 +59,8 @@ public class CatalogRepository {
                         FROM product_variants v
                         JOIN colors c ON c.id = v.color_id
                         JOIN sizes s ON s.id = v.size_id
-                        WHERE v.id = :id
+                        JOIN products p ON p.id = v.product_id
+                        WHERE v.id = :id AND p.deleted_at IS NULL
                         """)
                 .param("id", variantId)
                 .query((rs, n) -> new Head(rs.getLong("id"), rs.getString("sku"), rs.getString("barcode"),
@@ -190,7 +191,7 @@ public class CatalogRepository {
                     Long retail = rs.wasNull() ? null : price;
                     return new VariantSummary(rs.getLong("id"), rs.getString("sku"), rs.getString("barcode"),
                             rs.getString("name"), rs.getString("color"), rs.getString("size"), retail,
-                            rs.getInt("quantity"), media.url(rs.getString("storage_provider"), rs.getString("object_key")));
+                            rs.getInt("quantity"), media.thumbUrl(rs.getString("storage_provider"), rs.getString("object_key")));
                 })
                 .list();
         return new PageResult<>(items, page, size, total);
@@ -205,5 +206,52 @@ public class CatalogRepository {
                 .param("found", matchedVariantId != null)
                 .param("m", matchedVariantId, Types.BIGINT)
                 .update();
+    }
+
+    /** Bien the dai dien cho (san pham, mau) khi nhan dien bang anh: con hang nhieu nhat, size nho truoc. */
+    public Optional<Long> representativeVariantId(long productId, Long colorId, long storeId) {
+        return jdbc.sql("""
+                        SELECT v.id FROM product_variants v
+                        JOIN sizes s ON s.id = v.size_id
+                        LEFT JOIN stock_levels sl ON sl.variant_id = v.id AND sl.store_id = :store
+                        WHERE v.product_id = :pid AND v.status = 'ACTIVE'
+                          AND (CAST(:cid AS bigint) IS NULL OR v.color_id = :cid)
+                        ORDER BY COALESCE(sl.quantity, 0) DESC, s.sort_order, v.id
+                        LIMIT 1
+                        """)
+                .param("pid", productId).param("cid", colorId, Types.BIGINT).param("store", storeId)
+                .query(Long.class).optional();
+    }
+
+    public Optional<VariantSummary> findSummary(long variantId, long storeId) {
+        return jdbc.sql("""
+                        SELECT v.id, v.sku, v.barcode, p.name, c.name AS color, s.name AS size,
+                               (SELECT price FROM variant_prices vp WHERE vp.variant_id = v.id
+                                  AND vp.price_type = 'RETAIL' ORDER BY vp.min_qty LIMIT 1) AS retail_price,
+                               COALESCE(sl.quantity, 0) AS quantity,
+                               img.storage_provider, img.object_key
+                        FROM product_variants v
+                        JOIN products p ON p.id = v.product_id
+                        JOIN colors c ON c.id = v.color_id
+                        JOIN sizes s ON s.id = v.size_id
+                        LEFT JOIN stock_levels sl ON sl.variant_id = v.id AND sl.store_id = :store
+                        LEFT JOIN LATERAL (
+                            SELECT ma.storage_provider, ma.object_key
+                            FROM product_media pm JOIN media_assets ma ON ma.id = pm.asset_id
+                            WHERE pm.product_id = p.id AND (pm.color_id = v.color_id OR pm.color_id IS NULL)
+                            ORDER BY (pm.color_id IS NULL), pm.is_primary DESC, pm.sort_order, pm.id
+                            LIMIT 1
+                        ) img ON TRUE
+                        WHERE v.id = :id AND p.deleted_at IS NULL
+                        """)
+                .param("id", variantId).param("store", storeId)
+                .query((rs, n) -> {
+                    long price = rs.getLong("retail_price");
+                    Long retail = rs.wasNull() ? null : price;
+                    return new VariantSummary(rs.getLong("id"), rs.getString("sku"), rs.getString("barcode"),
+                            rs.getString("name"), rs.getString("color"), rs.getString("size"), retail,
+                            rs.getInt("quantity"), media.thumbUrl(rs.getString("storage_provider"), rs.getString("object_key")));
+                })
+                .optional();
     }
 }

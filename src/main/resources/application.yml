@@ -13,10 +13,27 @@ spring:
   jackson:
     default-property-inclusion: non_null
     time-zone: Asia/Ho_Chi_Minh
+  servlet:
+    multipart:
+      max-file-size: 12MB
+      max-request-size: 14MB
 
 server:
   port: ${PORT:8080}
+  tomcat:
+    # Doc het than yeu cau bi tu choi som (vd anh qua lon) de client nhan ma loi that thay vi bi ngat ket noi
+    max-swallow-size: 30MB
   forward-headers-strategy: framework
+
+# Swagger UI mac dinh TAT (production khong lo danh sach API). Profile dev bat len.
+springdoc:
+  api-docs:
+    enabled: ${SWAGGER_ENABLED:false}
+  swagger-ui:
+    enabled: ${SWAGGER_ENABLED:false}
+    persist-authorization: true     # giu token khi tai lai trang
+    operations-sorter: alpha
+    tags-sorter: alpha
 
 scanit:
   jwt:
@@ -26,7 +43,19 @@ scanit:
   cors:
     allowed-origins: ${CORS_ORIGINS:http://localhost:5173,http://localhost:3000}
   media:
-    # Chi can ten cloud de dung URL anh (khong can API secret de doc)
+    # Anh cu tren Cloudinary (chi de doc, khong can API secret)
     cloudinary-cloud-name: ${CLOUDINARY_CLOUD_NAME:}
+    storage: ${MEDIA_STORAGE:local}          # local | r2
+    local-dir: ${MEDIA_LOCAL_DIR:./data/media}
+    public-base-url: ${MEDIA_PUBLIC_BASE_URL:}   # r2: https://pub-xxxx.r2.dev hoac domain rieng
+    r2:
+      endpoint: ${R2_ENDPOINT:}              # https://<accountid>.r2.cloudflarestorage.com
+      bucket: ${R2_BUCKET:}
+      access-key: ${R2_ACCESS_KEY:}
+      secret-key: ${R2_SECRET_KEY:}
+  recognition:
+    url: ${RECOGNIZER_URL:http://localhost:8001}
+    min-score: ${RECOGNITION_MIN_SCORE:0.55}
+    confident-score: ${RECOGNITION_CONFIDENT_SCORE:0.80}
   # Chi bat o dev: tao tai khoan va hang mau
   seed-dev-data: ${SEED_DEV_DATA:false}

@@ -5,3 +5,9 @@ scanit:
   jwt:
     secret: ${JWT_SECRET:dev-only-secret-khong-dung-o-production-0123456789}
   seed-dev-data: ${SEED_DEV_DATA:true}
+
+springdoc:
+  api-docs:
+    enabled: true
+  swagger-ui:
+    enabled: true

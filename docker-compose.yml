@@ -1,11 +1,24 @@
 services:
   db:
-    image: pgvector/pgvector:pg16   # co san pgvector cho tinh nang quet anh sau nay
+    image: pgvector/pgvector:pg16   # co san pgvector cho tinh nang quet bang anh
     environment:
       POSTGRES_DB: scanit
       POSTGRES_USER: scanit
       POSTGRES_PASSWORD: scanit
     ports: ["5432:5432"]
     volumes: [pgdata:/var/lib/postgresql/data]
+    # Lan dau tao DB: bat extension (user scanit la superuser trong image nay)
+    # sau khi db len: docker compose exec db psql -U scanit -c "CREATE EXTENSION IF NOT EXISTS vector;"
+
+  recognizer:
+    build: ./recognizer
+    ports: ["8001:8001"]
+    volumes: [hfcache:/models]      # luu model da tai (~350MB) de lan sau khoi dong nhanh
+    mem_limit: 2g
+    # Chay thu quy trinh khi chua tai duoc model:  RECOGNIZER_FAKE=1 (ket qua khong co y nghia)
+    environment:
+      RECOGNIZER_FAKE: "${RECOGNIZER_FAKE:-0}"
+
 volumes:
   pgdata:
+  hfcache:
