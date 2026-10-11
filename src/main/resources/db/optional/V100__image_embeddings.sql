@@ -1,5 +1,5 @@
 -- TUY CHON: chi chay khi Postgres da cai pgvector (image `pgvector/pgvector:pg16` hoac `CREATE EXTENSION vector`).
--- De bat: them `classpath:db/optional` vao spring.flyway.locations.
+-- Chua duoc Liquibase tham chieu. De bat: tao changeset moi tro toi file nay khi can quet anh.
 CREATE EXTENSION IF NOT EXISTS vector;
 
 -- Vector dac trung anh de tim san pham bang camera (CLIP/SigLIP 512 chieu)

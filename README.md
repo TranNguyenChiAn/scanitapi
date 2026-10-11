@@ -2,19 +2,17 @@
 
 Repo backend. App mobile nằm ở repo `ScanIt` và chỉ gọi các API bên dưới.
 
-Backend riêng cho cửa hàng quần áo (Spring Boot 3.4, Java 17, PostgreSQL, JDBC thuần, Flyway). Viết lại từ `jupiter_pos_be` theo mô hình quần áo: sản phẩm → biến thể (màu × size), giá lẻ/sỉ, tồn kho theo cửa hàng, phân quyền theo permission.
+Backend riêng cho cửa hàng quần áo (Spring Boot 3.4, Java 17, PostgreSQL, JDBC thuần, Liquibase). Viết lại từ `jupiter_pos_be` theo mô hình quần áo: sản phẩm → biến thể (màu × size), giá lẻ/sỉ, tồn kho theo cửa hàng, phân quyền theo permission.
 
 ## Chạy
 
 ```bash
 docker compose up -d                       # Postgres 16 (kèm pgvector)
-export JWT_SECRET=$(openssl rand -base64 48)
-export SEED_DEV_DATA=true                  # tài khoản + set 8922 mẫu
-mvn spring-boot:run
+mvn spring-boot:run                        # profile dev: tự có khoá JWT thử và dữ liệu mẫu
 ```
 
-Tài khoản mẫu: `admin / admin123`, `nhanvien / 123456`. Schema do Flyway tạo từ `src/main/resources/db/migration`.
-Cấu hình qua biến môi trường, xem `.env.example`. Không có khoá hay mật khẩu nào trong mã nguồn.
+Tài khoản mẫu: `admin / admin123`, `nhanvien / 123456`. Schema do Liquibase tạo từ `src/main/resources/db/changelog`.
+Mặc định chạy profile `dev` (khoá JWT cố định, tự tạo dữ liệu mẫu), chỉ dùng trên máy cá nhân. Production: `SPRING_PROFILES_ACTIVE=prod` và đặt `JWT_SECRET`, `DB_*` qua biến môi trường (xem `.env.example`); thiếu `JWT_SECRET` app sẽ không khởi động. Không có khoá hay mật khẩu nào trong mã nguồn.
 
 ## API (đã làm)
 
@@ -35,7 +33,7 @@ Lỗi luôn có dạng `{code,message}`: 401 thiếu/hết hạn token, 403 thi�
 - Một lần gọi trả đủ: giá lẻ/sỉ, tồn kho, ảnh, màu/size còn lại của cùng sản phẩm.
 - Quyền đọc lại từ DB mỗi request, khoá tài khoản có hiệu lực ngay; token chỉ chứa id.
 - Thiếu token trả 401 (BE cũ trả 403 body rỗng).
-- Schema do Flyway quản lý, không dùng `ddl-auto=update`. Không còn Lombok/MapStruct/JPA.
+- Schema do Liquibase quản lý, không dùng `ddl-auto=update`. Không còn Lombok/MapStruct/JPA.
 - Secrets đọc từ môi trường.
 
 ## Chưa làm (các bước tiếp theo)

@@ -2,12 +2,14 @@
 spring:
   application:
     name: scanit-api
+  profiles:
+    default: dev   # chay local khong can cau hinh; production dat SPRING_PROFILES_ACTIVE=prod
   datasource:
     url: ${DB_URL:jdbc:postgresql://localhost:5432/scanit}
     username: ${DB_USER:scanit}
     password: ${DB_PASSWORD:scanit}
-  flyway:
-    locations: classpath:db/migration
+  liquibase:
+    change-log: classpath:db/changelog/db.changelog-master.xml
   jackson:
     default-property-inclusion: non_null
     time-zone: Asia/Ho_Chi_Minh
@@ -19,7 +21,7 @@ server:
 scanit:
   jwt:
     # Bat buoc, toi thieu 32 ky tu. Tao: openssl rand -base64 48
-    secret: "e7dba37f65856c1624c06bd1dd39fbf7496f901e1143d55e911a39113bc95327"
+    secret: ${JWT_SECRET:}
     ttl-hours: ${JWT_TTL_HOURS:12}
   cors:
     allowed-origins: ${CORS_ORIGINS:http://localhost:5173,http://localhost:3000}

@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!-- Schema ban dau cho cua hang quan ao: nguoi dung/phan quyen, san pham, ton kho, anh, cong no, quet. -->
+    <changeSet id="001-init" author="scanit">
+        <sqlFile path="db/changelog/sql/001_init.sql" relativeToChangelogFile="false"
+                 splitStatements="true" endDelimiter=";" stripComments="true"/>
+    </changeSet>
+
+</databaseChangeLog>

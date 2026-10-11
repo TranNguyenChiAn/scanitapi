@@ -1,0 +1,7 @@
+# Profile dev (mac dinh khi chay local). Chi de thu tren may ca nhan:
+# khoa JWT co dinh, tu tao tai khoan va du lieu mau.
+# Khi deploy that: dat SPRING_PROFILES_ACTIVE=prod va JWT_SECRET rieng, KHONG dung profile nay.
+scanit:
+  jwt:
+    secret: ${JWT_SECRET:dev-only-secret-khong-dung-o-production-0123456789}
+  seed-dev-data: ${SEED_DEV_DATA:true}

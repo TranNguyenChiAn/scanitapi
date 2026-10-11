@@ -1,6 +1,6 @@
 # Thiết kế database cho cửa hàng quần áo (ScanIt + Jupiter POS)
 
-Schema đang dùng: `src/main/resources/db/migration/V1__init.sql` (Flyway, cần extension `pg_trgm`). Bản đầy đủ kèm bảng vector cho quét ảnh: `docs/schema-full.sql` (cần `pgvector`; migration tương ứng ở `src/main/resources/db/optional`).
+Schema đang dùng: `src/main/resources/db/changelog/` (Liquibase: changelog gốc `db.changelog-master.xml`, SQL ở `sql/001_init.sql`; cần extension `pg_trgm`). Bản đầy đủ kèm bảng vector cho quét ảnh: `docs/schema-full.sql` (cần `pgvector`; migration tương ứng ở `src/main/resources/db/optional`).
 Đã chạy thử trên PostgreSQL 16 thật: tạo bảng thành công, luồng bán nợ rồi thu nợ cho số dư đúng, và 9 trường hợp dữ liệu sai đều bị chặn.
 Phần `pgvector` (bảng `image_embeddings`) chưa chạy thử được vì máy kiểm tra không có extension này, hãy chạy thử khi cài lên server của bạn.
 
@@ -111,7 +111,7 @@ Cột `storage_provider` cho phép đổi nhà cung cấp mà không đổi cấ
 | Quét mã vạch / ảnh | **Làm mới** | API `/scan/barcode/{code}` và `/scan/photo` |
 | Thống kê, thông báo | Dùng lại | Giữ nguyên |
 
-Thứ tự làm đề xuất: (1) schema và migration Liquibase + xử lý bảo mật, (2) API hàng hoá, quét mã vạch và đăng nhập cho mobile, (3) web admin: hàng hoá, nhân viên, phân quyền, (4) công nợ, (5) quét ảnh thật.
+Thứ tự làm đề xuất: (1) schema và changelog Liquibase + xử lý bảo mật, (2) API hàng hoá, quét mã vạch và đăng nhập cho mobile, (3) web admin: hàng hoá, nhân viên, phân quyền, (4) công nợ, (5) quét ảnh thật.
 
 ## 6. Những điểm cần bạn xác nhận
 
