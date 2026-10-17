@@ -7,5 +7,10 @@
     <!-- Moi thay doi schema = 1 file changelog moi, them include o duoi. Khong sua changeset da chay. -->
     <include file="db/changelog/changes/001-init.xml"/>
     <include file="db/changelog/changes/002-image-embeddings.xml"/>
+    <include file="db/changelog/changes/003-variant-note.xml"/>
+    <include file="db/changelog/changes/004-snowflake-ids.xml"/>
+    <include file="db/changelog/changes/005-multi-shop.xml"/>
+    <include file="db/changelog/changes/006-embeddings-shop.xml"/>
+    <include file="db/changelog/changes/007-order-price-permission.xml"/>
 
 </databaseChangeLog>

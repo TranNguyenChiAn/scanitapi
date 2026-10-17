@@ -17,32 +17,39 @@ public class UserLookup {
         this.jdbc = jdbc;
     }
 
-    private record Row(long id, String username, String fullName, String role, long roleId, Long storeId) {
+    private record Row(long id, String username, String fullName, String role, long roleId, long shopId,
+                       String shopCode, String shopName, Long storeId) {
     }
 
     private static final String SELECT = """
-            SELECT u.id, u.username, u.full_name, r.code AS role, r.id AS role_id, u.store_id
-            FROM users u JOIN roles r ON r.id = u.role_id
+            SELECT u.id, u.username, u.full_name, r.code AS role, r.id AS role_id, u.store_id,
+                   s.id AS shop_id, s.code AS shop_code, s.name AS shop_name
+            FROM users u JOIN roles r ON r.id = u.role_id JOIN shops s ON s.id = u.shop_id
             """;
 
     /** Nguoi dung dang hoat dong theo id (dung cho moi request co token). */
     public Optional<AuthUser> findActiveById(long id) {
-        return jdbc.sql(SELECT + " WHERE u.id = :id AND u.is_active AND u.deleted_at IS NULL")
+        return jdbc.sql(SELECT + " WHERE u.id = :id AND u.is_active AND u.deleted_at IS NULL AND s.status <> 'SUSPENDED'")
                 .param("id", id)
                 .query(this::mapRow).optional()
                 .map(this::withPermissions);
     }
 
-    /** Tim theo tai khoan, so dien thoai hoac email; tra ve cung mat khau da bam de kiem tra. */
-    public Optional<Credentials> findCredentials(String account) {
+    /**
+     * Tim trong 1 cua hang (theo ma cua hang) bang tai khoan, so dien thoai hoac email;
+     * tra ve cung mat khau da bam de kiem tra. Tai khoan chi duy nhat trong tung cua hang.
+     */
+    public Optional<Credentials> findCredentials(String shopCode, String account) {
         return jdbc.sql("""
-                        SELECT u.id, u.password_hash, u.is_active
-                        FROM users u
-                        WHERE u.deleted_at IS NULL
+                        SELECT u.id, u.password_hash, u.is_active, s.status
+                        FROM users u JOIN shops s ON s.id = u.shop_id
+                        WHERE lower(s.code) = lower(:shop) AND u.deleted_at IS NULL
                           AND (lower(u.username) = lower(:a) OR lower(u.email) = lower(:a) OR u.phone = :a)
+                        LIMIT 1
                         """)
-                .param("a", account)
-                .query((rs, n) -> new Credentials(rs.getLong("id"), rs.getString("password_hash"), rs.getBoolean("is_active")))
+                .param("shop", shopCode).param("a", account)
+                .query((rs, n) -> new Credentials(rs.getLong("id"), rs.getString("password_hash"),
+                        rs.getBoolean("is_active"), rs.getString("status")))
                 .optional();
     }
 
@@ -50,13 +57,14 @@ public class UserLookup {
         jdbc.sql("UPDATE users SET last_login_at = now() WHERE id = :id").param("id", id).update();
     }
 
-    public record Credentials(long id, String passwordHash, boolean active) {
+    public record Credentials(long id, String passwordHash, boolean active, String shopStatus) {
     }
 
     private Row mapRow(java.sql.ResultSet rs, int n) throws java.sql.SQLException {
         Long storeId = rs.getObject("store_id", Long.class);
         return new Row(rs.getLong("id"), rs.getString("username"), rs.getString("full_name"),
-                rs.getString("role"), rs.getLong("role_id"), storeId);
+                rs.getString("role"), rs.getLong("role_id"), rs.getLong("shop_id"), rs.getString("shop_code"),
+                rs.getString("shop_name"), storeId);
     }
 
     private AuthUser withPermissions(Row r) {
@@ -66,6 +74,7 @@ public class UserLookup {
                         """)
                 .param("rid", r.roleId())
                 .query(String.class).list();
-        return new AuthUser(r.id(), r.username(), r.fullName(), r.role(), r.storeId(), Set.copyOf(new HashSet<>(codes)));
+        return new AuthUser(r.id(), r.username(), r.fullName(), r.role(), r.shopId(), r.shopCode(), r.shopName(), r.storeId(),
+                Set.copyOf(new HashSet<>(codes)));
     }
 }

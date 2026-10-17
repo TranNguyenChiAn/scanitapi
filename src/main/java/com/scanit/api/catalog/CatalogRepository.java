@@ -3,6 +3,8 @@ package com.scanit.api.catalog;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.scanit.api.catalog.CatalogDtos.*;
+import com.scanit.api.common.IdGenerator;
+import com.scanit.api.security.Tenant;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Repository;
 
@@ -19,15 +21,18 @@ public class CatalogRepository {
     private final JdbcClient jdbc;
     private final ObjectMapper mapper;
     private final MediaUrls media;
+    private final IdGenerator ids;
 
-    public CatalogRepository(JdbcClient jdbc, ObjectMapper mapper, MediaUrls media) {
+    public CatalogRepository(JdbcClient jdbc, ObjectMapper mapper, MediaUrls media, IdGenerator ids) {
         this.jdbc = jdbc;
         this.mapper = mapper;
         this.media = media;
+        this.ids = ids;
     }
 
     public long defaultStoreId() {
-        return jdbc.sql("SELECT id FROM stores WHERE is_active ORDER BY id LIMIT 1").query(Long.class).single();
+        return jdbc.sql("SELECT id FROM stores WHERE shop_id = :shop AND is_active ORDER BY id LIMIT 1")
+                .param("shop", Tenant.shopId()).query(Long.class).single();
     }
 
     /**
@@ -38,33 +43,33 @@ public class CatalogRepository {
         String normalized = code.replaceFirst("^0+", "");
         return jdbc.sql("""
                         SELECT v.id FROM product_variants v JOIN products p ON p.id = v.product_id
-                        WHERE v.status = 'ACTIVE' AND p.deleted_at IS NULL AND p.status <> 'INACTIVE'
+                        WHERE v.shop_id = :shop AND v.status = 'ACTIVE' AND p.deleted_at IS NULL AND p.status <> 'INACTIVE'
                           AND (v.barcode = :code OR (:norm <> '' AND ltrim(v.barcode, '0') = :norm))
                         ORDER BY (v.barcode = :code) DESC
                         LIMIT 1
                         """)
-                .param("code", code).param("norm", normalized)
+                .param("shop", Tenant.shopId()).param("code", code).param("norm", normalized)
                 .query(Long.class).optional();
     }
 
-    private record Head(long variantId, String sku, String barcode, String status, long productId, long colorId,
+    private record Head(long variantId, String sku, String barcode, String status, String note, long productId, long colorId,
                         String colorName, String colorHex, long sizeId, String sizeName, long costPrice) {
     }
 
     public Optional<VariantDetail> loadDetail(long variantId, long storeId, boolean includeCost) {
         Optional<Head> head = jdbc.sql("""
-                        SELECT v.id, v.sku, v.barcode, v.status, v.product_id, v.cost_price,
+                        SELECT v.id, v.sku, v.barcode, v.status, v.note, v.product_id, v.cost_price,
                                c.id AS color_id, c.name AS color_name, c.hex_code,
                                s.id AS size_id, s.name AS size_name
                         FROM product_variants v
                         JOIN colors c ON c.id = v.color_id
                         JOIN sizes s ON s.id = v.size_id
                         JOIN products p ON p.id = v.product_id
-                        WHERE v.id = :id AND p.deleted_at IS NULL
+                        WHERE v.id = :id AND v.shop_id = :shop AND p.deleted_at IS NULL
                         """)
-                .param("id", variantId)
+                .param("id", variantId).param("shop", Tenant.shopId())
                 .query((rs, n) -> new Head(rs.getLong("id"), rs.getString("sku"), rs.getString("barcode"),
-                        rs.getString("status"), rs.getLong("product_id"), rs.getLong("color_id"),
+                        rs.getString("status"), rs.getString("note"), rs.getLong("product_id"), rs.getLong("color_id"),
                         rs.getString("color_name"), rs.getString("hex_code"), rs.getLong("size_id"),
                         rs.getString("size_name"), rs.getLong("cost_price")))
                 .optional();
@@ -123,7 +128,7 @@ public class CatalogRepository {
                         rs.getString("color"), rs.getString("size"), rs.getInt("quantity")))
                 .list();
 
-        return Optional.of(new VariantDetail(h.variantId(), h.sku(), h.barcode(), h.status(), product,
+        return Optional.of(new VariantDetail(h.variantId(), h.sku(), h.barcode(), h.status(), h.note(), product,
                 new ColorInfo(h.colorId(), h.colorName(), h.colorHex()), new SizeInfo(h.sizeId(), h.sizeName()),
                 prices, stock, images, siblings, includeCost ? h.costPrice() : null));
     }
@@ -154,12 +159,12 @@ public class CatalogRepository {
         String escaped = q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_");
         String like = "%" + escaped + "%";
         String where = """
-                v.status = 'ACTIVE' AND p.deleted_at IS NULL AND p.status <> 'INACTIVE'
+                v.shop_id = :shop AND v.status = 'ACTIVE' AND p.deleted_at IS NULL AND p.status <> 'INACTIVE'
                 AND (:q = '' OR p.name ILIKE :like OR p.style_code ILIKE :like OR v.sku ILIKE :like OR v.barcode = :q)
                 """;
 
         long total = jdbc.sql("SELECT count(*) FROM product_variants v JOIN products p ON p.id = v.product_id WHERE " + where)
-                .param("q", q).param("like", like)
+                .param("shop", Tenant.shopId()).param("q", q).param("like", like)
                 .query(Long.class).single();
 
         List<VariantSummary> items = jdbc.sql("""
@@ -167,7 +172,7 @@ public class CatalogRepository {
                                (SELECT price FROM variant_prices vp WHERE vp.variant_id = v.id
                                   AND vp.price_type = 'RETAIL' ORDER BY vp.min_qty LIMIT 1) AS retail_price,
                                COALESCE(sl.quantity, 0) AS quantity,
-                               img.storage_provider, img.object_key
+                               img.storage_provider, img.object_key, v.note
                         FROM product_variants v
                         JOIN products p ON p.id = v.product_id
                         JOIN colors c ON c.id = v.color_id
@@ -184,14 +189,14 @@ public class CatalogRepository {
                         ORDER BY p.name, c.name, s.sort_order
                         LIMIT :limit OFFSET :offset
                         """)
-                .param("q", q).param("like", like).param("store", storeId)
+                .param("shop", Tenant.shopId()).param("q", q).param("like", like).param("store", storeId)
                 .param("limit", size).param("offset", (long) page * size)
                 .query((rs, n) -> {
                     long price = rs.getLong("retail_price");
                     Long retail = rs.wasNull() ? null : price;
                     return new VariantSummary(rs.getLong("id"), rs.getString("sku"), rs.getString("barcode"),
                             rs.getString("name"), rs.getString("color"), rs.getString("size"), retail,
-                            rs.getInt("quantity"), media.thumbUrl(rs.getString("storage_provider"), rs.getString("object_key")));
+                            rs.getInt("quantity"), media.thumbUrl(rs.getString("storage_provider"), rs.getString("object_key")), rs.getString("note"));
                 })
                 .list();
         return new PageResult<>(items, page, size, total);
@@ -199,10 +204,10 @@ public class CatalogRepository {
 
     public void logScan(long userId, long storeId, String raw, Long matchedVariantId) {
         jdbc.sql("""
-                        INSERT INTO scan_events (user_id, store_id, mode, raw_value, found, matched_variant_id)
-                        VALUES (:u, :s, 'BARCODE', :raw, :found, :m)
+                        INSERT INTO scan_events (id, shop_id, user_id, store_id, mode, raw_value, found, matched_variant_id)
+                        VALUES (:id, :shop, :u, :s, 'BARCODE', :raw, :found, :m)
                         """)
-                .param("u", userId).param("s", storeId).param("raw", raw)
+                .param("id", ids.next()).param("shop", Tenant.shopId()).param("u", userId).param("s", storeId).param("raw", raw)
                 .param("found", matchedVariantId != null)
                 .param("m", matchedVariantId, Types.BIGINT)
                 .update();
@@ -214,12 +219,12 @@ public class CatalogRepository {
                         SELECT v.id FROM product_variants v
                         JOIN sizes s ON s.id = v.size_id
                         LEFT JOIN stock_levels sl ON sl.variant_id = v.id AND sl.store_id = :store
-                        WHERE v.product_id = :pid AND v.status = 'ACTIVE'
+                        WHERE v.shop_id = :shop AND v.product_id = :pid AND v.status = 'ACTIVE'
                           AND (CAST(:cid AS bigint) IS NULL OR v.color_id = :cid)
                         ORDER BY COALESCE(sl.quantity, 0) DESC, s.sort_order, v.id
                         LIMIT 1
                         """)
-                .param("pid", productId).param("cid", colorId, Types.BIGINT).param("store", storeId)
+                .param("shop", Tenant.shopId()).param("pid", productId).param("cid", colorId, Types.BIGINT).param("store", storeId)
                 .query(Long.class).optional();
     }
 
@@ -229,7 +234,7 @@ public class CatalogRepository {
                                (SELECT price FROM variant_prices vp WHERE vp.variant_id = v.id
                                   AND vp.price_type = 'RETAIL' ORDER BY vp.min_qty LIMIT 1) AS retail_price,
                                COALESCE(sl.quantity, 0) AS quantity,
-                               img.storage_provider, img.object_key
+                               img.storage_provider, img.object_key, v.note
                         FROM product_variants v
                         JOIN products p ON p.id = v.product_id
                         JOIN colors c ON c.id = v.color_id
@@ -242,15 +247,15 @@ public class CatalogRepository {
                             ORDER BY (pm.color_id IS NULL), pm.is_primary DESC, pm.sort_order, pm.id
                             LIMIT 1
                         ) img ON TRUE
-                        WHERE v.id = :id AND p.deleted_at IS NULL
+                        WHERE v.id = :id AND v.shop_id = :shop AND p.deleted_at IS NULL
                         """)
-                .param("id", variantId).param("store", storeId)
+                .param("id", variantId).param("shop", Tenant.shopId()).param("store", storeId)
                 .query((rs, n) -> {
                     long price = rs.getLong("retail_price");
                     Long retail = rs.wasNull() ? null : price;
                     return new VariantSummary(rs.getLong("id"), rs.getString("sku"), rs.getString("barcode"),
                             rs.getString("name"), rs.getString("color"), rs.getString("size"), retail,
-                            rs.getInt("quantity"), media.thumbUrl(rs.getString("storage_provider"), rs.getString("object_key")));
+                            rs.getInt("quantity"), media.thumbUrl(rs.getString("storage_provider"), rs.getString("object_key")), rs.getString("note"));
                 })
                 .optional();
     }

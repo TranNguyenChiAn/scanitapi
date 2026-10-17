@@ -10,6 +10,8 @@ import com.scanit.api.catalog.CatalogDtos.SizeInfo;
 import com.scanit.api.catalog.MediaUrls;
 import com.scanit.api.common.ApiException;
 import com.scanit.api.common.AuditLog;
+import com.scanit.api.common.IdGenerator;
+import com.scanit.api.security.Tenant;
 import com.scanit.api.common.Slugs;
 import com.scanit.api.media.MediaService;
 import org.springframework.http.HttpStatus;
@@ -40,8 +42,11 @@ public class AdminCatalogService {
     private final AuditLog audit;
     private final MediaService media;
     private final MediaUrls urls;
+    private final IdGenerator ids;
 
-    public AdminCatalogService(JdbcClient jdbc, ObjectMapper mapper, AuditLog audit, MediaService media, MediaUrls urls) {
+    public AdminCatalogService(JdbcClient jdbc, ObjectMapper mapper, AuditLog audit, MediaService media, MediaUrls urls,
+                               IdGenerator ids) {
+        this.ids = ids;
         this.jdbc = jdbc;
         this.mapper = mapper;
         this.audit = audit;
@@ -50,7 +55,8 @@ public class AdminCatalogService {
     }
 
     public long defaultStoreId() {
-        return jdbc.sql("SELECT id FROM stores WHERE is_active ORDER BY id LIMIT 1").query(Long.class).single();
+        return jdbc.sql("SELECT id FROM stores WHERE shop_id = :shop AND is_active ORDER BY id LIMIT 1")
+                .param("shop", shop()).query(Long.class).single();
     }
 
     // ------------------------------------------------------------------ doc
@@ -59,11 +65,11 @@ public class AdminCatalogService {
         String like = "%" + escaped + "%";
         String st = status == null ? "" : status.trim().toUpperCase(Locale.ROOT);
         String where = """
-                p.deleted_at IS NULL AND (:st = '' OR p.status = :st)
+                p.shop_id = :shop AND p.deleted_at IS NULL AND (:st = '' OR p.status = :st)
                 AND (:q = '' OR p.name ILIKE :like OR p.style_code ILIKE :like)
                 """;
         long total = jdbc.sql("SELECT count(*) FROM products p WHERE " + where)
-                .param("st", st).param("q", q).param("like", like).query(Long.class).single();
+                .param("shop", shop()).param("st", st).param("q", q).param("like", like).query(Long.class).single();
         List<ProductListItem> items = jdbc.sql("""
                         SELECT p.id, p.style_code, p.name, p.status, p.product_type,
                                (SELECT count(*) FROM product_variants v WHERE v.product_id = p.id AND v.status = 'ACTIVE') AS vc,
@@ -82,7 +88,7 @@ public class AdminCatalogService {
                         ORDER BY p.created_at DESC, p.id DESC
                         LIMIT :limit OFFSET :offset
                         """)
-                .param("st", st).param("q", q).param("like", like).param("store", storeId)
+                .param("shop", shop()).param("st", st).param("q", q).param("like", like).param("store", storeId)
                 .param("limit", size).param("offset", (long) page * size)
                 .query((rs, n) -> new ProductListItem(rs.getLong("id"), rs.getString("style_code"), rs.getString("name"),
                         rs.getString("status"), rs.getString("product_type"), rs.getInt("vc"), rs.getLong("qty"),
@@ -96,9 +102,9 @@ public class AdminCatalogService {
                         SELECT p.id, p.style_code, p.name, p.description, b.name AS brand, p.material, p.season,
                                p.target_gender, p.product_type, p.components::text AS components, p.status
                         FROM products p LEFT JOIN brands b ON b.id = p.brand_id
-                        WHERE p.id = :id AND p.deleted_at IS NULL
+                        WHERE p.id = :id AND p.shop_id = :shop AND p.deleted_at IS NULL
                         """)
-                .param("id", id)
+                .param("id", id).param("shop", shop())
                 .query((rs, n) -> new Object[]{rs.getLong("id"), rs.getString("style_code"), rs.getString("name"),
                         rs.getString("description"), rs.getString("brand"), rs.getString("material"),
                         rs.getString("season"), rs.getString("target_gender"), rs.getString("product_type"),
@@ -124,7 +130,7 @@ public class AdminCatalogService {
                 }).list();
 
         List<AdminVariant> variants = jdbc.sql("""
-                        SELECT v.id, v.sku, v.barcode, v.status, v.cost_price,
+                        SELECT v.id, v.sku, v.barcode, v.status, v.cost_price, v.note,
                                c.id AS color_id, c.name AS color_name, c.hex_code,
                                s.id AS size_id, s.name AS size_name,
                                COALESCE(sl.quantity, 0) AS quantity, COALESCE(sl.min_quantity, 0) AS min_quantity
@@ -141,7 +147,7 @@ public class AdminCatalogService {
                         new ColorInfo(rs.getLong("color_id"), rs.getString("color_name"), rs.getString("hex_code")),
                         new SizeInfo(rs.getLong("size_id"), rs.getString("size_name")),
                         rs.getLong("cost_price"), prices.getOrDefault(rs.getLong("id"), List.of()),
-                        rs.getInt("quantity"), rs.getInt("min_quantity")))
+                        rs.getInt("quantity"), rs.getInt("min_quantity"), rs.getString("note")))
                 .list();
 
         @SuppressWarnings("unchecked")
@@ -158,14 +164,14 @@ public class AdminCatalogService {
         if (style.contains("~del")) throw bad("Mã mẫu không hợp lệ.");
         assertStyleFree(style, null);
         String type = oneOf(r.productType(), PRODUCT_TYPES, "SINGLE", "Loại sản phẩm");
-        long id = jdbc.sql("""
-                        INSERT INTO products (style_code, name, description, brand_id, material, season, target_gender,
+        long id = ids.next();
+        jdbc.sql("""
+                        INSERT INTO products (id, shop_id, style_code, name, description, brand_id, material, season, target_gender,
                                               product_type, components, status, created_by)
-                        VALUES (:style, :name, :desc, :brand, :material, :season, :gender, :type,
+                        VALUES (:id, :shop, :style, :name, :desc, :brand, :material, :season, :gender, :type,
                                 CAST(:components AS jsonb), :status, :u)
-                        RETURNING id
                         """)
-                .param("style", style).param("name", r.name().trim())
+                .param("id", id).param("shop", shop()).param("style", style).param("name", r.name().trim())
                 .param("desc", blankToNull(r.description()), Types.VARCHAR)
                 .param("brand", upsertBrand(r.brand()), Types.BIGINT)
                 .param("material", blankToNull(r.material()), Types.VARCHAR)
@@ -175,7 +181,7 @@ public class AdminCatalogService {
                 .param("components", json(r.components()), Types.VARCHAR)
                 .param("status", oneOf(r.status(), PRODUCT_STATUSES, "ACTIVE", "Trạng thái"))
                 .param("u", userId)
-                .query(Long.class).single();
+                .update();
         replaceCategories(id, r.categories());
         if (r.variants() != null) {
             for (VariantCreate v : r.variants()) createVariant(id, style, v, userId, storeId);
@@ -194,9 +200,9 @@ public class AdminCatalogService {
                         UPDATE products SET style_code = :style, name = :name, description = :desc, brand_id = :brand,
                                material = :material, season = :season, target_gender = :gender, product_type = :type,
                                components = CAST(:components AS jsonb), status = :status, updated_at = now()
-                        WHERE id = :id AND deleted_at IS NULL
+                        WHERE id = :id AND shop_id = :shop AND deleted_at IS NULL
                         """)
-                .param("id", id).param("style", style).param("name", r.name().trim())
+                .param("id", id).param("shop", shop()).param("style", style).param("name", r.name().trim())
                 .param("desc", blankToNull(r.description()), Types.VARCHAR)
                 .param("brand", upsertBrand(r.brand()), Types.BIGINT)
                 .param("material", blankToNull(r.material()), Types.VARCHAR)
@@ -231,8 +237,8 @@ public class AdminCatalogService {
     // --------------------------------------------------------------- variant
     @Transactional
     public long addVariant(long productId, VariantCreate v, long userId, long storeId) {
-        String style = jdbc.sql("SELECT style_code FROM products WHERE id = :id AND deleted_at IS NULL")
-                .param("id", productId).query(String.class).optional()
+        String style = jdbc.sql("SELECT style_code FROM products WHERE id = :id AND shop_id = :shop AND deleted_at IS NULL")
+                .param("id", productId).param("shop", shop()).query(String.class).optional()
                 .orElseThrow(() -> notFound("Không tìm thấy sản phẩm."));
         return createVariant(productId, style, v, userId, storeId);
     }
@@ -247,6 +253,7 @@ public class AdminCatalogService {
         sku = sku.trim();
         String barcode = blankToNull(v.barcode());
         long cost = v.costPrice() == null ? 0 : v.costPrice();
+        String note = blankToNull(v.note());
 
         var existing = jdbc.sql("SELECT id, status FROM product_variants WHERE product_id = :p AND color_id = :c AND size_id = :s")
                 .param("p", productId).param("c", colorId).param("s", sizeId)
@@ -257,18 +264,20 @@ public class AdminCatalogService {
             id = (Long) existing.get()[0]; // bien the da xoa mem: bat lai thay vi bao trung
             assertSkuFree(sku, id);
             assertBarcodeFree(barcode, id);
-            jdbc.sql("UPDATE product_variants SET status = 'ACTIVE', sku = :sku, barcode = :bc, cost_price = :cost, updated_at = now() WHERE id = :id")
-                    .param("sku", sku).param("bc", barcode, Types.VARCHAR).param("cost", cost).param("id", id).update();
+            jdbc.sql("UPDATE product_variants SET status = 'ACTIVE', sku = :sku, barcode = :bc, cost_price = :cost, note = :note, updated_at = now() WHERE id = :id")
+                    .param("sku", sku).param("bc", barcode, Types.VARCHAR).param("cost", cost)
+                    .param("note", note, Types.VARCHAR).param("id", id).update();
         } else {
             assertSkuFree(sku, null);
             assertBarcodeFree(barcode, null);
-            id = jdbc.sql("""
-                            INSERT INTO product_variants (product_id, color_id, size_id, sku, barcode, cost_price)
-                            VALUES (:p, :c, :s, :sku, :bc, :cost) RETURNING id
+            id = ids.next();
+            jdbc.sql("""
+                            INSERT INTO product_variants (id, shop_id, product_id, color_id, size_id, sku, barcode, cost_price, note)
+                            VALUES (:id, :shop, :p, :c, :s, :sku, :bc, :cost, :note)
                             """)
-                    .param("p", productId).param("c", colorId).param("s", sizeId).param("sku", sku)
-                    .param("bc", barcode, Types.VARCHAR).param("cost", cost)
-                    .query(Long.class).single();
+                    .param("id", id).param("shop", shop()).param("p", productId).param("c", colorId).param("s", sizeId).param("sku", sku)
+                    .param("bc", barcode, Types.VARCHAR).param("cost", cost).param("note", note, Types.VARCHAR)
+                    .update();
         }
         if (barcode == null) setGeneratedBarcode(id);
         replacePrices(id, v.prices());
@@ -286,9 +295,9 @@ public class AdminCatalogService {
 
     @Transactional
     public long updateVariant(long variantId, VariantUpdate u, long userId, long storeId) {
-        var row = jdbc.sql("SELECT product_id, sku, barcode, cost_price, status FROM product_variants WHERE id = :id AND sku NOT LIKE '%~del%' FOR UPDATE")
-                .param("id", variantId)
-                .query((rs, n) -> new Object[]{rs.getLong(1), rs.getString(2), rs.getString(3), rs.getLong(4), rs.getString(5)})
+        var row = jdbc.sql("SELECT product_id, sku, barcode, cost_price, status, note FROM product_variants WHERE id = :id AND shop_id = :shop AND sku NOT LIKE '%~del%' FOR UPDATE")
+                .param("id", variantId).param("shop", shop())
+                .query((rs, n) -> new Object[]{rs.getLong(1), rs.getString(2), rs.getString(3), rs.getLong(4), rs.getString(5), rs.getString(6)})
                 .optional().orElseThrow(() -> notFound("Không tìm thấy biến thể."));
         String sku = u.sku() == null ? (String) row[1] : requireNonBlank(u.sku(), "SKU").trim();
         String barcode = (String) row[2];
@@ -299,10 +308,12 @@ public class AdminCatalogService {
         }
         long cost = u.costPrice() == null ? (Long) row[3] : u.costPrice();
         String status = u.status() == null ? (String) row[4] : oneOf(u.status(), VARIANT_STATUSES, null, "Trạng thái");
+        String note = u.note() == null ? (String) row[5] : blankToNull(u.note());
         assertSkuFree(sku, variantId);
         assertBarcodeFree(barcode, variantId);
-        jdbc.sql("UPDATE product_variants SET sku = :sku, barcode = :bc, cost_price = :cost, status = :st, updated_at = now() WHERE id = :id")
+        jdbc.sql("UPDATE product_variants SET sku = :sku, barcode = :bc, cost_price = :cost, status = :st, note = :note, updated_at = now() WHERE id = :id")
                 .param("sku", sku).param("bc", barcode, Types.VARCHAR).param("cost", cost).param("st", status)
+                .param("note", note, Types.VARCHAR)
                 .param("id", variantId).update();
         if (regen) setGeneratedBarcode(variantId);
         if (u.prices() != null) replacePrices(variantId, u.prices());
@@ -317,8 +328,8 @@ public class AdminCatalogService {
 
     @Transactional
     public long deleteVariant(long variantId, long userId) {
-        long productId = jdbc.sql("SELECT product_id FROM product_variants WHERE id = :id AND sku NOT LIKE '%~del%' FOR UPDATE")
-                .param("id", variantId).query(Long.class).optional()
+        long productId = jdbc.sql("SELECT product_id FROM product_variants WHERE id = :id AND shop_id = :shop AND sku NOT LIKE '%~del%' FOR UPDATE")
+                .param("id", variantId).param("shop", shop()).query(Long.class).optional()
                 .orElseThrow(() -> notFound("Không tìm thấy biến thể."));
         jdbc.sql("UPDATE product_variants SET status = 'INACTIVE', sku = sku || '~del' || id, barcode = NULL, updated_at = now() WHERE id = :id")
                 .param("id", variantId).update();
@@ -329,8 +340,8 @@ public class AdminCatalogService {
     // ----------------------------------------------------------------- stock
     @Transactional
     public StockResult adjustStock(long variantId, StockAdjust a, long userId, long storeId) {
-        boolean ok = jdbc.sql("SELECT EXISTS (SELECT 1 FROM product_variants WHERE id = :id AND sku NOT LIKE '%~del%')")
-                .param("id", variantId).query(Boolean.class).single();
+        boolean ok = jdbc.sql("SELECT EXISTS (SELECT 1 FROM product_variants WHERE id = :id AND shop_id = :shop AND sku NOT LIKE '%~del%')")
+                .param("id", variantId).param("shop", shop()).query(Boolean.class).single();
         if (!ok) throw notFound("Không tìm thấy biến thể.");
         if ((a.delta() == null) == (a.setTo() == null)) throw bad("Chỉ nhập một trong hai: delta (nhập/xuất) hoặc setTo (kiểm kho).");
         if (a.delta() != null && a.delta() == 0) throw bad("Số lượng thay đổi phải khác 0.");
@@ -351,73 +362,91 @@ public class AdminCatalogService {
         jdbc.sql("UPDATE stock_levels SET quantity = :q, updated_at = now() WHERE store_id = :s AND variant_id = :v")
                 .param("q", (int) target).param("s", storeId).param("v", variantId).update();
         jdbc.sql("""
-                        INSERT INTO stock_movements (store_id, variant_id, movement_type, quantity_delta, balance_after, note, created_by)
-                        VALUES (:s, :v, :t, :d, :b, :n, :u)
+                        INSERT INTO stock_movements (id, shop_id, store_id, variant_id, movement_type, quantity_delta, balance_after, note, created_by)
+                        VALUES (:id, :shop, :s, :v, :t, :d, :b, :n, :u)
                         """)
-                .param("s", storeId).param("v", variantId).param("t", type).param("d", real).param("b", (int) target)
+                .param("id", ids.next()).param("shop", shop()).param("s", storeId).param("v", variantId).param("t", type).param("d", real).param("b", (int) target)
                 .param("n", note, Types.VARCHAR).param("u", userId).update();
         audit.record(userId, "STOCK", "variant", variantId, Map.of("delta", real, "balance", (int) target, "type", type));
         return new StockResult(variantId, (int) target, real);
     }
 
     private void ensureStockRow(long storeId, long variantId) {
-        jdbc.sql("INSERT INTO stock_levels (store_id, variant_id, quantity, min_quantity) VALUES (:s, :v, 0, 0) ON CONFLICT DO NOTHING")
-                .param("s", storeId).param("v", variantId).update();
+        jdbc.sql("INSERT INTO stock_levels (shop_id, store_id, variant_id, quantity, min_quantity) VALUES (:shop, :s, :v, 0, 0) ON CONFLICT DO NOTHING")
+                .param("shop", shop()).param("s", storeId).param("v", variantId).update();
     }
 
     // ------------------------------------------------------------- reference
     public List<NamedItem> colors() {
-        return jdbc.sql("SELECT id, name, hex_code FROM colors ORDER BY name")
-                .query((rs, n) -> new NamedItem(rs.getLong(1), rs.getString(2), rs.getString(3))).list();
+        return jdbc.sql("SELECT id, name, hex_code FROM colors WHERE shop_id = :shop ORDER BY name")
+                .param("shop", shop()).query((rs, n) -> new NamedItem(rs.getLong(1), rs.getString(2), rs.getString(3))).list();
     }
 
     public List<NamedItem> sizes() {
-        return jdbc.sql("SELECT id, name, sort_order::text FROM sizes ORDER BY sort_order, name")
-                .query((rs, n) -> new NamedItem(rs.getLong(1), rs.getString(2), null)).list();
+        return jdbc.sql("SELECT id, name, sort_order::text FROM sizes WHERE shop_id = :shop ORDER BY sort_order, name")
+                .param("shop", shop()).query((rs, n) -> new NamedItem(rs.getLong(1), rs.getString(2), null)).list();
     }
 
     public List<NamedItem> categories() {
-        return jdbc.sql("SELECT id, name, slug FROM categories ORDER BY name")
-                .query((rs, n) -> new NamedItem(rs.getLong(1), rs.getString(2), rs.getString(3))).list();
+        return jdbc.sql("SELECT id, name, slug FROM categories WHERE shop_id = :shop ORDER BY name")
+                .param("shop", shop()).query((rs, n) -> new NamedItem(rs.getLong(1), rs.getString(2), rs.getString(3))).list();
     }
 
     public List<NamedItem> brands() {
-        return jdbc.sql("SELECT id, name FROM brands ORDER BY name")
-                .query((rs, n) -> new NamedItem(rs.getLong(1), rs.getString(2), null)).list();
+        return jdbc.sql("SELECT id, name FROM brands WHERE shop_id = :shop ORDER BY name")
+                .param("shop", shop()).query((rs, n) -> new NamedItem(rs.getLong(1), rs.getString(2), null)).list();
     }
 
     // --------------------------------------------------------------- helpers
+    private static long shop() {
+        return Tenant.shopId();
+    }
+
+    /** INSERT mot dong (id, shop_id, ten) voi id Snowflake moi; tra ve id. sql dung :id, :shop, :n. */
+    private long insertNamed(String sql, String name) {
+        long newId = ids.next();
+        jdbc.sql(sql).param("id", newId).param("shop", shop()).param("n", name).update();
+        return newId;
+    }
+
     private Long upsertBrand(String name) {
         String n = blankToNull(name);
         if (n == null) return null;
-        return jdbc.sql("SELECT id FROM brands WHERE lower(name) = lower(:n)").param("n", n)
+        return jdbc.sql("SELECT id FROM brands WHERE shop_id = :shop AND lower(name) = lower(:n)")
+                .param("shop", shop()).param("n", n)
                 .query(Long.class).optional()
-                .orElseGet(() -> jdbc.sql("INSERT INTO brands (name) VALUES (:n) RETURNING id").param("n", n)
-                        .query(Long.class).single());
+                .orElseGet(() -> insertNamed("INSERT INTO brands (id, shop_id, name) VALUES (:id, :shop, :n)", n));
     }
 
     private long upsertColor(String name, String hex) {
         String n = name.trim();
         String h = blankToNull(hex);
         if (h != null && !h.matches("^#[0-9A-Fa-f]{6}$")) throw bad("Mã màu phải dạng #RRGGBB.");
-        var id = jdbc.sql("SELECT id FROM colors WHERE lower(name) = lower(:n)").param("n", n).query(Long.class).optional();
+        var id = jdbc.sql("SELECT id FROM colors WHERE shop_id = :shop AND lower(name) = lower(:n)")
+                .param("shop", shop()).param("n", n).query(Long.class).optional();
         if (id.isPresent()) {
             if (h != null) jdbc.sql("UPDATE colors SET hex_code = :h WHERE id = :id").param("h", h).param("id", id.get()).update();
             return id.get();
         }
-        return jdbc.sql("INSERT INTO colors (name, hex_code) VALUES (:n, :h) RETURNING id")
-                .param("n", n).param("h", h, Types.VARCHAR).query(Long.class).single();
+        long newId = ids.next();
+        jdbc.sql("INSERT INTO colors (id, shop_id, name, hex_code) VALUES (:id, :shop, :n, :h)")
+                .param("id", newId).param("shop", shop()).param("n", n).param("h", h, Types.VARCHAR).update();
+        return newId;
     }
 
     private long upsertSize(String name) {
         String n = name.trim();
-        var id = jdbc.sql("SELECT id FROM sizes WHERE lower(name) = lower(:n)").param("n", n).query(Long.class).optional();
+        var id = jdbc.sql("SELECT id FROM sizes WHERE shop_id = :shop AND lower(name) = lower(:n)")
+                .param("shop", shop()).param("n", n).query(Long.class).optional();
         if (id.isPresent()) return id.get();
         Integer known = SIZE_ORDER.get(Slugs.compactUpper(n));
         int order = known != null ? known
-                : Math.max(100, jdbc.sql("SELECT COALESCE(max(sort_order), 0) + 1 FROM sizes").query(Integer.class).single());
-        return jdbc.sql("INSERT INTO sizes (name, sort_order) VALUES (:n, :o) RETURNING id")
-                .param("n", n).param("o", order).query(Long.class).single();
+                : Math.max(100, jdbc.sql("SELECT COALESCE(max(sort_order), 0) + 1 FROM sizes WHERE shop_id = :shop")
+                        .param("shop", shop()).query(Integer.class).single());
+        long newId = ids.next();
+        jdbc.sql("INSERT INTO sizes (id, shop_id, name, sort_order) VALUES (:id, :shop, :n, :o)")
+                .param("id", newId).param("shop", shop()).param("n", n).param("o", order).update();
+        return newId;
     }
 
     private void replaceCategories(long productId, List<String> names) {
@@ -428,9 +457,14 @@ public class AdminCatalogService {
             if (name == null) continue;
             String slug = Slugs.hyphen(name);
             if (slug.isEmpty()) throw bad("Tên danh mục không hợp lệ.");
-            long cid = jdbc.sql("SELECT id FROM categories WHERE slug = :s").param("s", slug).query(Long.class).optional()
-                    .orElseGet(() -> jdbc.sql("INSERT INTO categories (name, slug) VALUES (:n, :s) RETURNING id")
-                            .param("n", name.trim()).param("s", slug).query(Long.class).single());
+            long cid = jdbc.sql("SELECT id FROM categories WHERE shop_id = :shop AND slug = :s")
+                    .param("shop", shop()).param("s", slug).query(Long.class).optional()
+                    .orElseGet(() -> {
+                        long newId = ids.next();
+                        jdbc.sql("INSERT INTO categories (id, shop_id, name, slug) VALUES (:id, :shop, :n, :s)")
+                                .param("id", newId).param("shop", shop()).param("n", name.trim()).param("s", slug).update();
+                        return newId;
+                    });
             jdbc.sql("INSERT INTO product_categories (product_id, category_id) VALUES (:p, :c) ON CONFLICT DO NOTHING")
                     .param("p", productId).param("c", cid).update();
         }
@@ -445,20 +479,41 @@ public class AdminCatalogService {
             int minQty = p.minQty() == null ? 1 : p.minQty();
             if (p.price() == null) throw bad("Thiếu giá.");
             if (!seen.add(type + ":" + minQty)) throw bad("Trùng bậc giá " + type + " từ " + minQty + " sản phẩm.");
-            jdbc.sql("INSERT INTO variant_prices (variant_id, price_type, min_qty, price) VALUES (:v, :t, :q, :p)")
-                    .param("v", variantId).param("t", type).param("q", minQty).param("p", p.price()).update();
+            jdbc.sql("INSERT INTO variant_prices (id, variant_id, price_type, min_qty, price) VALUES (:id, :v, :t, :q, :p)")
+                    .param("id", ids.next()).param("v", variantId).param("t", type).param("q", minQty).param("p", p.price()).update();
         }
     }
 
-    /** EAN-13 noi bo: "200" + id 9 chu so + so kiem tra. Dai 200 la dai dung trong cua hang nen khong dung voi ma hang that. */
+    /**
+     * EAN-13 noi bo: "200" + so thu tu 9 chu so cua shop + so kiem tra. Dai 200 la dai dung trong cua hang nen khong
+     * dung voi ma hang that. So thu tu lay tu bo dem rieng cua shop (khong dung id Snowflake vi qua dai cho 9 chu so).
+     */
     private void setGeneratedBarcode(long variantId) {
-        jdbc.sql("UPDATE product_variants SET barcode = :b WHERE id = :id")
-                .param("b", internalBarcode(variantId)).param("id", variantId).update();
+        for (int attempt = 0; attempt < 20; attempt++) {
+            String b = internalBarcode(nextSequence("barcode"));
+            boolean used = jdbc.sql("SELECT EXISTS (SELECT 1 FROM product_variants WHERE shop_id = :shop AND barcode = :b)")
+                    .param("shop", shop()).param("b", b).query(Boolean.class).single();
+            if (used) continue; // nguoi dung tu nhap dung ma 200... nay: bo qua, lay so ke tiep
+            jdbc.sql("UPDATE product_variants SET barcode = :b WHERE id = :id")
+                    .param("b", b).param("id", variantId).update();
+            return;
+        }
+        throw conflict("Không tạo được mã vạch tự động, thử lại.");
     }
 
-    static String internalBarcode(long id) {
-        if (id < 0 || id > 999_999_999L) throw new IllegalArgumentException("id qua lon de sinh ma vach");
-        String body = "200" + String.format("%09d", id);
+    /** Tang va tra ve gia tri tiep theo cua bo dem trong shop (khoa dong nen khong bao gio cap trung). */
+    private long nextSequence(String name) {
+        return jdbc.sql("""
+                        INSERT INTO shop_sequences (shop_id, name, value) VALUES (:shop, :n, 1)
+                        ON CONFLICT (shop_id, name) DO UPDATE SET value = shop_sequences.value + 1
+                        RETURNING value
+                        """)
+                .param("shop", shop()).param("n", name).query(Long.class).single();
+    }
+
+    static String internalBarcode(long seq) {
+        if (seq < 0 || seq > 999_999_999L) throw new IllegalArgumentException("so thu tu qua lon de sinh ma vach");
+        String body = "200" + String.format("%09d", seq);
         int sum = 0;
         for (int i = 0; i < 12; i++) {
             int d = body.charAt(i) - '0';
@@ -468,27 +523,27 @@ public class AdminCatalogService {
     }
 
     private void assertStyleFree(String style, Long exceptId) {
-        boolean used = jdbc.sql("SELECT EXISTS (SELECT 1 FROM products WHERE lower(style_code) = lower(:c) AND (CAST(:id AS bigint) IS NULL OR id <> :id))")
-                .param("c", style).param("id", exceptId, Types.BIGINT).query(Boolean.class).single();
+        boolean used = jdbc.sql("SELECT EXISTS (SELECT 1 FROM products WHERE shop_id = :shop AND lower(style_code) = lower(:c) AND (CAST(:id AS bigint) IS NULL OR id <> :id))")
+                .param("shop", shop()).param("c", style).param("id", exceptId, Types.BIGINT).query(Boolean.class).single();
         if (used) throw conflict("Mã mẫu " + style + " đã tồn tại.");
     }
 
     private void assertSkuFree(String sku, Long exceptId) {
-        boolean used = jdbc.sql("SELECT EXISTS (SELECT 1 FROM product_variants WHERE lower(sku) = lower(:s) AND (CAST(:id AS bigint) IS NULL OR id <> :id))")
-                .param("s", sku).param("id", exceptId, Types.BIGINT).query(Boolean.class).single();
+        boolean used = jdbc.sql("SELECT EXISTS (SELECT 1 FROM product_variants WHERE shop_id = :shop AND lower(sku) = lower(:s) AND (CAST(:id AS bigint) IS NULL OR id <> :id))")
+                .param("shop", shop()).param("s", sku).param("id", exceptId, Types.BIGINT).query(Boolean.class).single();
         if (used) throw conflict("SKU " + sku + " đã tồn tại.");
     }
 
     private void assertBarcodeFree(String barcode, Long exceptId) {
         if (barcode == null) return;
-        boolean used = jdbc.sql("SELECT EXISTS (SELECT 1 FROM product_variants WHERE barcode = :b AND (CAST(:id AS bigint) IS NULL OR id <> :id))")
-                .param("b", barcode).param("id", exceptId, Types.BIGINT).query(Boolean.class).single();
+        boolean used = jdbc.sql("SELECT EXISTS (SELECT 1 FROM product_variants WHERE shop_id = :shop AND barcode = :b AND (CAST(:id AS bigint) IS NULL OR id <> :id))")
+                .param("shop", shop()).param("b", barcode).param("id", exceptId, Types.BIGINT).query(Boolean.class).single();
         if (used) throw conflict("Mã vạch " + barcode + " đã gắn với biến thể khác.");
     }
 
     private void requireProduct(long id) {
-        boolean ok = jdbc.sql("SELECT EXISTS (SELECT 1 FROM products WHERE id = :id AND deleted_at IS NULL)")
-                .param("id", id).query(Boolean.class).single();
+        boolean ok = jdbc.sql("SELECT EXISTS (SELECT 1 FROM products WHERE id = :id AND shop_id = :shop AND deleted_at IS NULL)")
+                .param("id", id).param("shop", shop()).query(Boolean.class).single();
         if (!ok) throw notFound("Không tìm thấy sản phẩm.");
     }
 

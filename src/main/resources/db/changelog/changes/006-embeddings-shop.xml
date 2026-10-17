@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!-- Bo qua (CONTINUE) neu chua co bang image_embeddings; se thu lai o lan khoi dong sau -->
+    <changeSet id="006-embeddings-shop" author="scanit">
+        <preConditions onFail="CONTINUE">
+            <sqlCheck expectedResult="1">
+                SELECT count(*) FROM information_schema.tables t
+                WHERE t.table_schema = current_schema() AND t.table_name = 'image_embeddings'
+                  AND NOT EXISTS (SELECT 1 FROM information_schema.columns c
+                                  WHERE c.table_schema = current_schema() AND c.table_name = 'image_embeddings'
+                                    AND c.column_name = 'shop_id')
+            </sqlCheck>
+        </preConditions>
+        <sqlFile path="db/changelog/sql/006_embeddings_shop.sql" relativeToChangelogFile="false"
+                 splitStatements="true" endDelimiter=";" stripComments="true"/>
+    </changeSet>
+
+</databaseChangeLog>

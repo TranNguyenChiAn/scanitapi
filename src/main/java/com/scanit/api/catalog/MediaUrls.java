@@ -41,6 +41,11 @@ public class MediaUrls {
 
     public static String thumbKey(String objectKey) {
         if (objectKey == null) return null;
-        return objectKey.startsWith("m/") ? "t/" + objectKey.substring(2) : null;
+        if (objectKey.startsWith("m/")) return "t/" + objectKey.substring(2); // anh cu (truoc khi chia theo shop)
+        if (objectKey.startsWith("s/")) { // s/<shopId>/m/<ma>.webp -> s/<shopId>/t/<ma>.webp
+            int i = objectKey.indexOf("/m/");
+            if (i > 1) return objectKey.substring(0, i) + "/t/" + objectKey.substring(i + 3);
+        }
+        return null;
     }
 }

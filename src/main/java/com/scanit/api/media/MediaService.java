@@ -3,6 +3,8 @@ package com.scanit.api.media;
 import com.scanit.api.catalog.MediaUrls;
 import com.scanit.api.common.ApiException;
 import com.scanit.api.common.AuditLog;
+import com.scanit.api.common.IdGenerator;
+import com.scanit.api.security.Tenant;
 import com.scanit.api.media.ImageProcessor.Processed;
 import com.scanit.api.media.MediaDtos.MediaItem;
 import com.scanit.api.media.MediaDtos.MediaPatch;
@@ -38,10 +40,12 @@ public class MediaService {
     private final RecognitionClient recognizer;
     private final AuditLog audit;
     private final TransactionTemplate tx;
+    private final IdGenerator ids;
 
     public MediaService(JdbcClient jdbc, MediaStorage storage, ImageProcessor processor, MediaUrls urls,
                         EmbeddingRepository embeddings, RecognitionClient recognizer, AuditLog audit,
-                        PlatformTransactionManager txm) {
+                        PlatformTransactionManager txm, IdGenerator ids) {
+        this.ids = ids;
         this.jdbc = jdbc;
         this.storage = storage;
         this.processor = processor;
@@ -78,7 +82,7 @@ public class MediaService {
     public MediaItem upload(long productId, Long colorId, byte[] bytes, long userId) {
         requireProduct(productId);
         if (colorId != null) {
-            boolean ok = jdbc.sql("SELECT EXISTS (SELECT 1 FROM colors WHERE id = :c)").param("c", colorId)
+            boolean ok = jdbc.sql("SELECT EXISTS (SELECT 1 FROM colors WHERE id = :c AND shop_id = :shop)").param("c", colorId).param("shop", Tenant.shopId())
                     .query(Boolean.class).single();
             if (!ok) throw new ApiException(HttpStatus.BAD_REQUEST, "VALIDATION", "Màu không tồn tại.");
         }
@@ -99,11 +103,13 @@ public class MediaService {
     }
 
     private long ensureAsset(Processed p, long userId) {
-        var existing = jdbc.sql("SELECT id FROM media_assets WHERE sha256 = :h").param("h", p.sha256())
+        var existing = jdbc.sql("SELECT id FROM media_assets WHERE shop_id = :shop AND sha256 = :h")
+                .param("shop", Tenant.shopId()).param("h", p.sha256())
                 .query(Long.class).optional();
-        if (existing.isPresent()) return existing.get(); // cung anh da co: khong luu lai
+        if (existing.isPresent()) return existing.get(); // cung anh da co trong shop: khong luu lai
 
-        String key = "m/" + p.sha256() + ".webp";
+        // Anh moi luu theo thu muc cua shop; anh cu (khoa "m/...") van doc binh thuong
+        String key = "s/" + Tenant.shopId() + "/m/" + p.sha256() + ".webp";
         String thumbKey = MediaUrls.thumbKey(key);
         try {
             storage.put(key, p.full(), "image/webp");
@@ -113,15 +119,18 @@ public class MediaService {
             throw new ApiException(HttpStatus.BAD_GATEWAY, "STORAGE", "Không lưu được ảnh lên kho lưu trữ. Thử lại sau.");
         }
         try {
-            return jdbc.sql("""
-                            INSERT INTO media_assets (storage_provider, object_key, format, width, height, size_bytes, sha256, created_by)
-                            VALUES (:prov, :key, 'webp', :w, :h, :size, :sha, :u) RETURNING id
+            long id = ids.next();
+            jdbc.sql("""
+                            INSERT INTO media_assets (id, shop_id, storage_provider, object_key, format, width, height, size_bytes, sha256, created_by)
+                            VALUES (:id, :shop, :prov, :key, 'webp', :w, :h, :size, :sha, :u)
                             """)
-                    .param("prov", storage.provider()).param("key", key).param("w", p.width()).param("h", p.height())
+                    .param("id", id).param("shop", Tenant.shopId()).param("prov", storage.provider()).param("key", key).param("w", p.width()).param("h", p.height())
                     .param("size", p.full().length).param("sha", p.sha256()).param("u", userId)
-                    .query(Long.class).single();
+                    .update();
+            return id;
         } catch (DuplicateKeyException race) { // hai nguoi cung up 1 anh cung luc
-            return jdbc.sql("SELECT id FROM media_assets WHERE sha256 = :h").param("h", p.sha256())
+            return jdbc.sql("SELECT id FROM media_assets WHERE shop_id = :shop AND sha256 = :h")
+                    .param("shop", Tenant.shopId()).param("h", p.sha256())
                     .query(Long.class).single();
         }
     }
@@ -134,16 +143,17 @@ public class MediaService {
                 .param("p", productId).param("c", colorId, Types.BIGINT).param("a", assetId)
                 .query(Long.class).optional();
         if (existing.isPresent()) return existing.get();
-        return jdbc.sql("""
-                        INSERT INTO product_media (product_id, color_id, asset_id, sort_order, is_primary)
-                        SELECT :p, CAST(:c AS bigint), :a, COALESCE(max(sort_order), -1) + 1,
+        long id = ids.next();
+        jdbc.sql("""
+                        INSERT INTO product_media (id, product_id, color_id, asset_id, sort_order, is_primary)
+                        SELECT :id, :p, CAST(:c AS bigint), :a, COALESCE(max(sort_order), -1) + 1,
                                NOT EXISTS (SELECT 1 FROM product_media x WHERE x.product_id = :p
                                            AND x.color_id IS NOT DISTINCT FROM CAST(:c AS bigint) AND x.is_primary)
                         FROM product_media WHERE product_id = :p AND color_id IS NOT DISTINCT FROM CAST(:c AS bigint)
-                        RETURNING id
                         """)
-                .param("p", productId).param("c", colorId, Types.BIGINT).param("a", assetId)
-                .query(Long.class).single();
+                .param("id", id).param("p", productId).param("c", colorId, Types.BIGINT).param("a", assetId)
+                .update();
+        return id;
     }
 
     private void embedQuietly(long assetId, byte[] thumb) {
@@ -157,6 +167,7 @@ public class MediaService {
     }
 
     public MediaItem patch(long productId, long mediaId, MediaPatch patch, long userId) {
+        requireProduct(productId);
         tx.executeWithoutResult(s -> {
             var row = jdbc.sql("SELECT color_id FROM product_media WHERE id = :id AND product_id = :p FOR UPDATE")
                     .param("id", mediaId).param("p", productId)
@@ -187,6 +198,7 @@ public class MediaService {
     }
 
     public void delete(long productId, long mediaId, long userId) {
+        requireProduct(productId);
         Orphan orphan = tx.execute(s -> {
             var row = jdbc.sql("SELECT color_id, asset_id, is_primary FROM product_media WHERE id = :id AND product_id = :p FOR UPDATE")
                     .param("id", mediaId).param("p", productId)
@@ -261,8 +273,8 @@ public class MediaService {
     }
 
     private void requireProduct(long productId) {
-        boolean ok = jdbc.sql("SELECT EXISTS (SELECT 1 FROM products WHERE id = :p AND deleted_at IS NULL)")
-                .param("p", productId).query(Boolean.class).single();
+        boolean ok = jdbc.sql("SELECT EXISTS (SELECT 1 FROM products WHERE id = :p AND shop_id = :shop AND deleted_at IS NULL)")
+                .param("p", productId).param("shop", Tenant.shopId()).query(Boolean.class).single();
         if (!ok) throw new ApiException(HttpStatus.NOT_FOUND, "NOT_FOUND", "Không tìm thấy sản phẩm.");
     }
 }

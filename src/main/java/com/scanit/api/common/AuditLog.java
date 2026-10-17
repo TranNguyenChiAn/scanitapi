@@ -1,6 +1,7 @@
 package com.scanit.api.common;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.scanit.api.security.Tenant;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Component;
 
@@ -13,10 +14,12 @@ public class AuditLog {
 
     private final JdbcClient jdbc;
     private final ObjectMapper mapper;
+    private final IdGenerator ids;
 
-    public AuditLog(JdbcClient jdbc, ObjectMapper mapper) {
+    public AuditLog(JdbcClient jdbc, ObjectMapper mapper, IdGenerator ids) {
         this.jdbc = jdbc;
         this.mapper = mapper;
+        this.ids = ids;
     }
 
     public void record(long userId, String action, String entityType, Long entityId, Map<String, ?> changes) {
@@ -27,10 +30,10 @@ public class AuditLog {
             json = null;
         }
         jdbc.sql("""
-                        INSERT INTO audit_logs (user_id, action, entity_type, entity_id, changes)
-                        VALUES (:u, :a, :t, :i, CAST(:c AS jsonb))
+                        INSERT INTO audit_logs (id, shop_id, user_id, action, entity_type, entity_id, changes)
+                        VALUES (:id, :shop, :u, :a, :t, :i, CAST(:c AS jsonb))
                         """)
-                .param("u", userId).param("a", action).param("t", entityType)
+                .param("id", ids.next()).param("shop", Tenant.shopId()).param("u", userId).param("a", action).param("t", entityType)
                 .param("i", entityId, Types.BIGINT).param("c", json, Types.VARCHAR)
                 .update();
     }

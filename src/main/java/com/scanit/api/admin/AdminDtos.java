@@ -30,7 +30,8 @@ public final class AdminDtos {
                                 @Min(value = 0, message = "Giá vốn không được âm") Long costPrice,
                                 @Valid List<PriceInput> prices,
                                 @Min(value = 0, message = "Tồn đầu kỳ không được âm") Integer quantity,
-                                @Min(value = 0, message = "Mức cảnh báo không được âm") Integer minQuantity) {
+                                @Min(value = 0, message = "Mức cảnh báo không được âm") Integer minQuantity,
+                                @Size(max = 500, message = "Ghi chú tối đa 500 ký tự") String note) {
     }
 
     /** Truong null = giu nguyen. prices != null = thay toan bo bang gia. Khong doi mau/size (de giu lich su kho). */
@@ -39,7 +40,9 @@ public final class AdminDtos {
                                 @Min(value = 0, message = "Giá vốn không được âm") Long costPrice,
                                 String status,
                                 @Valid List<PriceInput> prices,
-                                @Min(value = 0, message = "Mức cảnh báo không được âm") Integer minQuantity) {
+                                @Min(value = 0, message = "Mức cảnh báo không được âm") Integer minQuantity,
+                                /** null = giu nguyen; chuoi rong = xoa ghi chu */
+                                @Size(max = 500, message = "Ghi chú tối đa 500 ký tự") String note) {
     }
 
     public record ProductRequest(@NotBlank(message = "Thiếu mã mẫu") @Size(max = 60, message = "Mã mẫu quá dài") String styleCode,
@@ -57,7 +60,7 @@ public final class AdminDtos {
     }
 
     public record AdminVariant(long id, String sku, String barcode, String status, ColorInfo color, SizeInfo size,
-                               long costPrice, List<PriceInfo> prices, int quantity, int minQuantity) {
+                               long costPrice, List<PriceInfo> prices, int quantity, int minQuantity, String note) {
     }
 
     public record AdminProduct(long id, String styleCode, String name, String description, String brand,

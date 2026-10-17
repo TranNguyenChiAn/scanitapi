@@ -7,6 +7,8 @@ import com.scanit.api.common.ApiException;
 import com.scanit.api.config.AppProperties;
 import com.scanit.api.recognition.ScanDtos.Candidate;
 import com.scanit.api.recognition.ScanDtos.ScanImageResult;
+import com.scanit.api.common.IdGenerator;
+import com.scanit.api.security.Tenant;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Service;
@@ -28,16 +30,18 @@ public class ScanService {
     private final CatalogRepository catalog;
     private final JdbcClient jdbc;
     private final ObjectMapper mapper;
+    private final IdGenerator ids;
     private final double minScore;
     private final double confidentScore;
 
     public ScanService(RecognitionClient client, EmbeddingRepository embeddings, CatalogRepository catalog,
-                       JdbcClient jdbc, ObjectMapper mapper, AppProperties props) {
+                       JdbcClient jdbc, ObjectMapper mapper, IdGenerator ids, AppProperties props) {
         this.client = client;
         this.embeddings = embeddings;
         this.catalog = catalog;
         this.jdbc = jdbc;
         this.mapper = mapper;
+        this.ids = ids;
         var r = props.recognition();
         this.minScore = r != null && r.minScore() > 0 ? r.minScore() : 0.55;
         this.confidentScore = r != null && r.confidentScore() > 0 ? r.confidentScore() : 0.80;
@@ -81,21 +85,24 @@ public class ScanService {
         }
         Long matched = cands.isEmpty() ? null : cands.get(0).variant().id();
         Double top = cands.isEmpty() ? null : cands.get(0).score();
-        return jdbc.sql("""
-                        INSERT INTO scan_events (user_id, store_id, mode, found, matched_variant_id, top_candidates, confidence)
-                        VALUES (:u, :s, 'PHOTO', :found, :m, CAST(:c AS jsonb), :conf) RETURNING id
+        long id = ids.next();
+        jdbc.sql("""
+                        INSERT INTO scan_events (id, shop_id, user_id, store_id, mode, found, matched_variant_id, top_candidates, confidence)
+                        VALUES (:id, :shop, :u, :s, 'PHOTO', :found, :m, CAST(:c AS jsonb), :conf)
                         """)
-                .param("u", userId).param("s", storeId).param("found", confident)
+                .param("id", id).param("shop", Tenant.shopId()).param("u", userId).param("s", storeId).param("found", confident)
                 .param("m", confident ? matched : null, Types.BIGINT)
                 .param("c", json)
                 .param("conf", top == null ? null : top.floatValue(), Types.REAL)
-                .query(Long.class).single();
+                .update();
+        return id;
     }
 
     /** Nhan vien xac nhan ket qua dung -> dung de do do chinh xac / tinh chinh nguong sau nay. */
     public void confirm(long scanEventId, long variantId, long userId) {
-        int n = jdbc.sql("UPDATE scan_events SET confirmed_variant_id = :v WHERE id = :id AND user_id = :u AND mode = 'PHOTO'")
-                .param("v", variantId).param("id", scanEventId).param("u", userId).update();
+        int n = jdbc.sql("UPDATE scan_events SET confirmed_variant_id = :v WHERE id = :id AND shop_id = :shop AND user_id = :u AND mode = 'PHOTO' "
+                + "AND EXISTS (SELECT 1 FROM product_variants x WHERE x.id = :v AND x.shop_id = :shop)")
+                .param("v", variantId).param("id", scanEventId).param("shop", Tenant.shopId()).param("u", userId).update();
         if (n == 0) throw new ApiException(HttpStatus.NOT_FOUND, "NOT_FOUND", "Không tìm thấy lượt quét.");
     }
 }

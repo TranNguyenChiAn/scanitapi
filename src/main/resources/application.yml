@@ -57,5 +57,7 @@ scanit:
     url: ${RECOGNIZER_URL:http://localhost:8001}
     min-score: ${RECOGNITION_MIN_SCORE:0.55}
     confident-score: ${RECOGNITION_CONFIDENT_SCORE:0.80}
+  snowflake:
+    worker-id: ${SNOWFLAKE_WORKER_ID:1}   # 0..1023; chay nhieu ban backend thi moi ban 1 so khac nhau
   # Chi bat o dev: tao tai khoan va hang mau
   seed-dev-data: ${SEED_DEV_DATA:false}

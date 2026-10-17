@@ -38,13 +38,16 @@ public class AuthController {
     @PostMapping("/login")
     public LoginResponse login(@Valid @RequestBody LoginRequest req) {
         var account = req.account().trim();
-        var creds = users.findCredentials(account);
+        var creds = users.findCredentials(req.shop().trim(), account);
 
         boolean ok = encoder.matches(req.password(), creds.map(UserLookup.Credentials::passwordHash).orElse(dummyHash))
                 && creds.isPresent();
         // Thong bao chung cho sai tai khoan / sai mat khau, khong lo tai khoan co ton tai hay khong
         if (!ok) {
             throw new ApiException(HttpStatus.UNAUTHORIZED, "BAD_CREDENTIALS", "Tài khoản hoặc mật khẩu không đúng.");
+        }
+        if ("SUSPENDED".equals(creds.get().shopStatus())) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "SHOP_SUSPENDED", "Cửa hàng đã bị tạm khoá. Liên hệ nhà cung cấp.");
         }
         if (!creds.get().active()) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ACCOUNT_LOCKED", "Tài khoản đã bị khoá. Liên hệ quản lý.");

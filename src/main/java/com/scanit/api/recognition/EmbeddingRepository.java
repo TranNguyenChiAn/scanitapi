@@ -1,5 +1,7 @@
 package com.scanit.api.recognition;
 
+import com.scanit.api.common.IdGenerator;
+import com.scanit.api.security.Tenant;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Repository;
 
@@ -15,9 +17,11 @@ public class EmbeddingRepository {
     }
 
     private final JdbcClient jdbc;
+    private final IdGenerator ids;
 
-    public EmbeddingRepository(JdbcClient jdbc) {
+    public EmbeddingRepository(JdbcClient jdbc, IdGenerator ids) {
         this.jdbc = jdbc;
+        this.ids = ids;
     }
 
     /** Bang image_embeddings chi co khi pgvector da duoc bat (changeset 002). */
@@ -28,16 +32,17 @@ public class EmbeddingRepository {
 
     public void save(long assetId, String model, float[] vector) {
         jdbc.sql("""
-                        INSERT INTO image_embeddings (asset_id, model, embedding)
-                        VALUES (:a, :m, CAST(:v AS vector))
+                        INSERT INTO image_embeddings (id, shop_id, asset_id, model, embedding)
+                        VALUES (:id, :shop, :a, :m, CAST(:v AS vector))
                         ON CONFLICT (asset_id, model) DO UPDATE SET embedding = EXCLUDED.embedding
                         """)
-                .param("a", assetId).param("m", model).param("v", literal(vector))
+                .param("id", ids.next()).param("shop", Tenant.shopId()).param("a", assetId).param("m", model).param("v", literal(vector))
                 .update();
     }
 
     /**
-     * Lay `limit` anh gan nhat theo khoang cach cosine (dung chi muc HNSW), roi gop theo (san pham, mau).
+     * Lay anh gan nhat theo khoang cach cosine CUA SHOP DANG DANG NHAP (loc shop_id ngay trong truy van tim gan nhat,
+     * khong lay top-K toan he thong roi moi loc), roi gop theo (san pham, mau).
      * Khoang cach 0 = giong het; score = 1 - khoang cach.
      */
     public List<Hit> nearest(float[] query, String model, int limit) {
@@ -45,7 +50,7 @@ public class EmbeddingRepository {
                         WITH nn AS (
                             SELECT asset_id, embedding <=> CAST(:q AS vector) AS dist
                             FROM image_embeddings
-                            WHERE model = :m
+                            WHERE shop_id = :shop AND model = :m
                             ORDER BY embedding <=> CAST(:q AS vector)
                             LIMIT 40
                         )
@@ -53,12 +58,12 @@ public class EmbeddingRepository {
                         FROM nn
                         JOIN product_media pm ON pm.asset_id = nn.asset_id
                         JOIN products p ON p.id = pm.product_id
-                        WHERE p.deleted_at IS NULL AND p.status = 'ACTIVE'
+                        WHERE p.shop_id = :shop AND p.deleted_at IS NULL AND p.status = 'ACTIVE'
                         GROUP BY pm.product_id, pm.color_id
                         ORDER BY dist
                         LIMIT :k
                         """)
-                .param("q", literal(query)).param("m", model).param("k", limit)
+                .param("shop", Tenant.shopId()).param("q", literal(query)).param("m", model).param("k", limit)
                 .query((rs, n) -> {
                     long color = rs.getLong("color_id");
                     Long colorId = rs.wasNull() ? null : color;
@@ -70,11 +75,11 @@ public class EmbeddingRepository {
     public List<PendingAsset> pendingAssets(String provider, boolean all, int limit) {
         return jdbc.sql("""
                         SELECT ma.id, ma.object_key FROM media_assets ma
-                        WHERE ma.storage_provider = :p
+                        WHERE ma.shop_id = :shop AND ma.storage_provider = :p
                           AND (:all OR NOT EXISTS (SELECT 1 FROM image_embeddings ie WHERE ie.asset_id = ma.id))
                         ORDER BY ma.id LIMIT :limit
                         """)
-                .param("p", provider).param("all", all).param("limit", limit)
+                .param("shop", Tenant.shopId()).param("p", provider).param("all", all).param("limit", limit)
                 .query((rs, n) -> new PendingAsset(rs.getLong(1), rs.getString(2)))
                 .list();
     }

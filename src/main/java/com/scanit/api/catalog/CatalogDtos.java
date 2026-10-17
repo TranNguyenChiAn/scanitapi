@@ -28,13 +28,13 @@ public final class CatalogDtos {
     }
 
     /** costPrice chi co khi nguoi goi co quyen product.manage. */
-    public record VariantDetail(long id, String sku, String barcode, String status, ProductInfo product,
+    public record VariantDetail(long id, String sku, String barcode, String status, String note, ProductInfo product,
                                 ColorInfo color, SizeInfo size, List<PriceInfo> prices, StockInfo stock,
                                 List<String> images, List<Sibling> siblings, Long costPrice) {
     }
 
     public record VariantSummary(long id, String sku, String barcode, String productName, String color,
-                                 String size, Long retailPrice, int quantity, String image) {
+                                 String size, Long retailPrice, int quantity, String image, String note) {
     }
 
     public record PageResult<T>(List<T> items, int page, int size, long total) {

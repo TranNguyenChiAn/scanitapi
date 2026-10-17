@@ -5,9 +5,14 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 import java.util.List;
 
 @ConfigurationProperties(prefix = "scanit")
-public record AppProperties(Jwt jwt, Cors cors, Media media, Recognition recognition, boolean seedDevData) {
+public record AppProperties(Jwt jwt, Cors cors, Media media, Recognition recognition, Snowflake snowflake,
+                            boolean seedDevData) {
 
     public record Jwt(String secret, long ttlHours) {
+    }
+
+    /** workerId 0..1023: moi tien trinh backend chay cung luc phai co gia tri rieng. */
+    public record Snowflake(long workerId) {
     }
 
     public record Cors(List<String> allowedOrigins) {

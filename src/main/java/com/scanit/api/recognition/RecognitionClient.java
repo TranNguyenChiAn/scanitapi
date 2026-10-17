@@ -4,6 +4,8 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.scanit.api.common.ApiException;
 import com.scanit.api.config.AppProperties;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Component;
 
@@ -23,7 +25,12 @@ public class RecognitionClient {
     public record Embedding(String model, float[] vector) {
     }
 
-    private final HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(3)).build();
+    private static final Logger log = LoggerFactory.getLogger(RecognitionClient.class);
+
+    // HTTP/1.1 co dinh: mac dinh JDK thu nang cap h2c tren ket noi khong ma hoa, de lam mat than yeu cau o mot so may chu Python
+    private final HttpClient http = HttpClient.newBuilder()
+            .version(HttpClient.Version.HTTP_1_1)
+            .connectTimeout(Duration.ofSeconds(3)).build();
     private final ObjectMapper mapper;
     private final String baseUrl;
 
@@ -50,8 +57,13 @@ public class RecognitionClient {
                     .POST(HttpRequest.BodyPublishers.ofByteArray(body.toByteArray()))
                     .build();
             HttpResponse<String> res = http.send(req, HttpResponse.BodyHandlers.ofString());
+            if (res.statusCode() != 200) {
+                String snippet = res.body() == null ? "" : res.body().substring(0, Math.min(300, res.body().length()));
+                log.warn("Recognizer tra {} cho {} byte anh: {}", res.statusCode(), image.length, snippet);
+            }
             if (res.statusCode() == 400 || res.statusCode() == 422) {
-                throw new ApiException(HttpStatus.BAD_REQUEST, "VALIDATION", "Không đọc được ảnh để nhận diện.");
+                throw new ApiException(HttpStatus.BAD_REQUEST, "VALIDATION",
+                        "Không đọc được ảnh để nhận diện (dịch vụ trả " + res.statusCode() + ", xem log backend).");
             }
             if (res.statusCode() != 200) {
                 throw unavailable("Dịch vụ nhận diện ảnh trả lỗi " + res.statusCode() + ".", null);
